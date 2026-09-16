@@ -1,0 +1,60 @@
+name: Verify Code Signing
+
+# Isolates the code-signing step of a release: imports the Developer ID
+# certificate from CSC_LINK and signs the app, without notarizing and without
+# publishing anything.
+#
+# It exists because signing and notarization use different credentials, and a
+# 1.7.0 release failed at signing while the notarization credentials were
+# confirmed good. `builder_version` allows pinning electron-builder to an older
+# release, to tell an expired certificate apart from a regression in the tool.
+on:
+  workflow_dispatch:
+    inputs:
+      builder_version:
+        description: 'electron-builder version to test (blank = the lockfile version)'
+        required: false
+        default: ''
+
+jobs:
+  sign:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm ci
+
+      - name: Override electron-builder version
+        if: inputs.builder_version != ''
+        run: |
+          echo "Testing electron-builder@${{ inputs.builder_version }}"
+          npm install --no-save --no-audit --no-fund "electron-builder@${{ inputs.builder_version }}"
+
+      - name: Report versions
+        run: |
+          echo "electron-builder: $(npx electron-builder --version)"
+          echo "runner macOS: $(sw_vers -productVersion)"
+
+      - run: npm run build
+
+      # --dir stops before the dmg, which is all that is needed: signing has
+      # already happened by then. The Apple notarization credentials are
+      # deliberately not provided, so that step is skipped and the run stays
+      # fast and focused on the certificate.
+      - name: Sign only
+        env:
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          MIXPANEL_TOKEN: ${{ secrets.MIXPANEL_TOKEN }}
+        run: npx electron-builder --mac --dir --publish never
+
+      - name: Confirm the signature
+        run: |
+          codesign --verify --deep --strict --verbose=2 dist/mac-arm64/Spotter.app
+          echo "---"
+          codesign -dvv dist/mac-arm64/Spotter.app 2>&1 | grep -E "Authority|TeamIdentifier" || true
