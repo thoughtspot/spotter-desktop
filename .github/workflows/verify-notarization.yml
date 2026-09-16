@@ -1,0 +1,61 @@
+name: Verify Notarization Credentials
+
+# Answers one question: do the stored Apple credentials still work?
+#
+# App-specific passwords get revoked and expire silently, and the only place
+# that usually surfaces is a release build — after several minutes of work, at
+# the moment you are trying to ship. This asks Apple directly instead.
+#
+# Builds nothing and publishes nothing. Run it from the Actions tab, or with
+# `gh workflow run verify-notarization.yml`.
+on:
+  workflow_dispatch:
+
+jobs:
+  verify:
+    runs-on: macos-latest
+    steps:
+      - name: Ask Apple whether the credentials are accepted
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          missing=""
+          [ -z "$APPLE_ID" ] && missing="$missing APPLE_ID"
+          [ -z "$APPLE_APP_SPECIFIC_PASSWORD" ] && missing="$missing APPLE_APP_SPECIFIC_PASSWORD"
+          [ -z "$APPLE_TEAM_ID" ] && missing="$missing APPLE_TEAM_ID"
+          if [ -n "$missing" ]; then
+            echo "::error::Secrets not set:$missing"
+            exit 1
+          fi
+
+          # `history` is the cheapest authenticated call there is — it submits
+          # nothing and only lists past submissions. Output is written to a file
+          # so a failure can be classified before anything reaches the log.
+          set +e
+          xcrun notarytool history \
+            --apple-id "$APPLE_ID" \
+            --password "$APPLE_APP_SPECIFIC_PASSWORD" \
+            --team-id "$APPLE_TEAM_ID" > result.txt 2>&1
+          status=$?
+          set -e
+
+          if [ $status -eq 0 ]; then
+            echo "✅ Credentials accepted by Apple — a release build will notarize."
+            echo "Recent submissions:"
+            head -20 result.txt
+            exit 0
+          fi
+
+          if grep -q "401" result.txt; then
+            echo "::error::Apple rejected the credentials (HTTP 401)."
+            echo "The app-specific password has expired or been revoked."
+            echo "Generate a new one at appleid.apple.com and update the"
+            echo "APPLE_APP_SPECIFIC_PASSWORD secret. An App Store Connect API"
+            echo "key does not expire and would avoid this recurring."
+          else
+            echo "::error::notarytool failed for another reason:"
+            head -20 result.txt
+          fi
+          exit 1
