@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<!-- Shown in the auth window while the identity provider is contacted. Kept
+     self-contained — no fonts, images or scripts from the network — so it
+     paints instantly and works before any connection is established. Tokens
+     mirror src/renderer/styles.css so the wait looks like part of the app. -->
+<title>Signing in…</title>
+<style>
+  :root {
+    --bg: #ffffff;
+    --text-strong: #0f172a;
+    --text-muted: rgba(15, 23, 42, 0.6);
+    --text-faint: rgba(15, 23, 42, 0.38);
+    --accent: #2563eb;
+    --accent-soft: #93b4f5;
+    --track: rgba(15, 23, 42, 0.07);
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    background: var(--bg);
+    color: var(--text-strong);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    -webkit-font-smoothing: antialiased;
+    user-select: none;
+    cursor: default;
+  }
+  .stage { display: flex; flex-direction: column; align-items: center; gap: 26px; padding: 0 40px; }
+
+  /* Two counter-rotating arcs over a static track. The offset speeds keep the
+     motion from reading as a single stalled ring on a slow connection. */
+  .orbit { position: relative; width: 62px; height: 62px; }
+  .orbit::before {
+    content: ""; position: absolute; inset: 0;
+    border-radius: 50%; border: 3px solid var(--track);
+  }
+  .arc {
+    position: absolute; inset: 0;
+    border-radius: 50%;
+    border: 3px solid transparent;
+  }
+  .arc.outer { border-top-color: var(--accent); animation: spin 1s linear infinite; }
+  .arc.inner {
+    inset: 10px;
+    border-bottom-color: var(--accent-soft);
+    animation: spin 1.45s linear infinite reverse;
+  }
+  .pulse {
+    position: absolute; inset: 22px;
+    border-radius: 50%; background: var(--accent);
+    animation: breathe 1.9s ease-in-out infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  @keyframes breathe {
+    0%, 100% { transform: scale(0.65); opacity: 0.25; }
+    50%      { transform: scale(1);    opacity: 0.55; }
+  }
+
+  .copy { text-align: center; display: flex; flex-direction: column; gap: 7px; }
+  .title { font-size: 15px; font-weight: 600; letter-spacing: -0.01em; }
+  .subtitle { font-size: 13px; color: var(--text-muted); }
+
+  /* Revealed only if the wait runs long, so a fast sign-in never shows it. */
+  .hint {
+    font-size: 12px; color: var(--text-faint); max-width: 300px; line-height: 1.5;
+    opacity: 0; transition: opacity 0.6s ease;
+  }
+  .hint.show { opacity: 1; }
+
+  @media (prefers-reduced-motion: reduce) {
+    .arc, .pulse { animation-duration: 3s; }
+    .pulse { animation: none; opacity: 0.35; }
+  }
+</style>
+</head>
+<body>
+  <div class="stage">
+    <div class="orbit">
+      <div class="arc outer"></div>
+      <div class="arc inner"></div>
+      <div class="pulse"></div>
+    </div>
+    <div class="copy">
+      <div class="title">Connecting to ThoughtSpot</div>
+      <div class="subtitle">Taking you to your sign-in page…</div>
+    </div>
+    <div class="hint" id="hint">
+      Still working. Single sign-on can take a few moments the first time.
+    </div>
+  </div>
+  <script>
+    setTimeout(function () {
+      var el = document.getElementById('hint');
+      if (el) el.classList.add('show');
+    }, 6000);
+  </script>
+</body>
+</html>
