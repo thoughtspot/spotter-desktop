@@ -2,6 +2,7 @@ const { app, BrowserWindow, Notification, dialog, session, ipcMain, shell, scree
 const path = require('path');
 const config = require('./config');
 const orgs = require('./orgs');
+const user = require('./user');
 const { protocolOf, isSameOrigin, isValidHttpsUrl } = require('./urls');
 const updater = require('./updater');
 const { buildMenu } = require('./menu');
@@ -184,6 +185,8 @@ ipcMain.handle('logout', async () => {
 // ---------- Orgs ----------
 
 ipcMain.handle('get-orgs', () => orgs.fetchOrgs());
+
+ipcMain.handle('get-current-user', () => user.fetchCurrentUser());
 
 ipcMain.handle('switch-org', (_event, orgId) => orgs.switchOrg(orgId));
 

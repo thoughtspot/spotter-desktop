@@ -4,6 +4,8 @@ import { SpotterEmbed, useEmbedRef } from '@thoughtspot/visual-embed-sdk/react';
 import { useAnswerNotification } from './useAnswerNotification';
 import { useSpotterAnalytics } from './useSpotterAnalytics';
 import { useConversationActivity } from './useConversationActivity';
+import { useShareAnalytics } from './useShareAnalytics';
+import { useEmbedErrors } from './useEmbedErrors';
 import { useOrgs } from './useOrgs';
 import { OrgSwitcher } from './OrgSwitcher';
 import { initAnalytics, identify, track, setOrg } from './analytics';
@@ -93,6 +95,10 @@ function initializeSDK(tsHost, customizations, thirdPartyVars, onSuccess, onAuth
     authType: AuthType.None,
     customizations,
     suppressNoCookieAccessAlert: true,
+    // Turns the embedded app's pushState into replaceState (26.9+). Without it
+    // the iframe builds up history the user cannot see, and a back gesture in a
+    // window with no address bar walks through it instead of doing nothing.
+    overrideHistoryState: true,
     // Read by a third-party script through window.tsEmbed, but only once the
     // cluster has External Tool Script Integration enabled and the hosting
     // domain allowlisted. Inert until then — see README.
@@ -109,6 +115,20 @@ function initializeSDK(tsHost, customizations, thirdPartyVars, onSuccess, onAuth
 
 // ---------- Error Boundary ----------
 
+// Shown for both ways Spotter can fail: a render that throws in this window,
+// and an embed that reports itself unusable. One screen because from the user's
+// side it is one situation — Spotter is not there and reloading is the way out.
+function EmbedErrorScreen() {
+  return (
+    <div className="loading-overlay">
+      <p className="loading-text">Something went wrong loading Spotter.</p>
+      <button className="setup-button" onClick={() => window.location.reload()}>
+        Reload
+      </button>
+    </div>
+  );
+}
+
 class ErrorBoundary extends React.Component {
   constructor(props) {
     super(props);
@@ -117,14 +137,7 @@ class ErrorBoundary extends React.Component {
   static getDerivedStateFromError() { return { hasError: true }; }
   render() {
     if (this.state.hasError) {
-      return (
-        <div className="loading-overlay">
-          <p className="loading-text">Something went wrong loading Spotter.</p>
-          <button className="setup-button" onClick={() => window.location.reload()}>
-            Reload
-          </button>
-        </div>
-      );
+      return <EmbedErrorScreen />;
     }
     return this.props.children;
   }
@@ -284,13 +297,27 @@ function SpotterPage({ tsHost, appVersion, onSignOut, onAuthLost }) {
     let cancelled = false;
     (async () => {
       try {
-        const session = await getSessionInfo();
+        // The email is not part of the embed session info, so it comes from the
+        // main process, which owns the session cookies. Requested alongside
+        // rather than after, so a slow or failing user lookup does not hold up
+        // identifying the user by the GUID we already have.
+        const [session, user] = await Promise.all([
+          getSessionInfo(),
+          window.electronAPI?.getCurrentUser?.() ?? null,
+        ]);
         if (cancelled) return;
         identify({
           userGUID: session?.userGUID,
           host: getHostLabel(tsHost),
+          clusterName: session?.clusterName,
+          clusterVersion: session?.releaseVersion,
           appVersion,
           platform: window.electronAPI?.platform,
+          arch: window.electronAPI?.arch,
+          email: user?.email,
+          displayName: user?.displayName,
+          accountType: user?.accountType,
+          isFirstLogin: user?.isFirstLogin,
         });
       } catch {
         // Analytics identity is best-effort; a failure here must not surface.
@@ -301,6 +328,8 @@ function SpotterPage({ tsHost, appVersion, onSignOut, onAuthLost }) {
 
   const answerNotification = useAnswerNotification();
   const analytics = useSpotterAnalytics();
+  const shareAnalytics = useShareAnalytics();
+  const { handlers: errorHandlers, fatal: embedFailed, reset: resetEmbedError } = useEmbedErrors();
   const { handlers: conversationHandlers, hasAsked, reset: resetConversation } = useConversationActivity();
   const { orgs, currentOrgId, switching, error: orgError, epoch, switchTo } = useOrgs({
     tsHost,
@@ -323,9 +352,10 @@ function SpotterPage({ tsHost, appVersion, onSignOut, onAuthLost }) {
     }
     if (await switchTo(orgId)) {
       resetConversation();
+      resetEmbedError();
       track('Org Switched');
     }
-  }, [orgs, hasAsked, resetConversation, switchTo]);
+  }, [orgs, hasAsked, resetConversation, resetEmbedError, switchTo]);
 
   return (
     <div className="app-container">
@@ -358,6 +388,8 @@ function SpotterPage({ tsHost, appVersion, onSignOut, onAuthLost }) {
           id="ts-embed"
         >
           <ErrorBoundary>
+            {embedFailed && <EmbedErrorScreen />}
+            {!embedFailed && (
             <SpotterEmbed
               // Remount on Org switch: a new key destroys the iframe and builds a
               // fresh one, which picks up the session's newly-switched Org.
@@ -384,7 +416,7 @@ function SpotterPage({ tsHost, appVersion, onSignOut, onAuthLost }) {
                 spotterShareModalTitle: 'Share this conversation',
                 spotterShareEmptySubtitle: 'Not shared with anyone yet',
               }}
-              {...mergeHandlers(answerNotification, analytics, conversationHandlers)}
+              {...mergeHandlers(answerNotification, analytics, shareAnalytics, conversationHandlers, errorHandlers)}
               spotterSidebarConfig={{
                 enablePastConversationsSidebar: true,
                 spotterSidebarTitle: 'My Conversations',
@@ -395,6 +427,7 @@ function SpotterPage({ tsHost, appVersion, onSignOut, onAuthLost }) {
               // desktop window. Removed rather than repointed (26.3+).
               hiddenActions={[Action.SpotterDocs]}
             />
+            )}
           </ErrorBoundary>
         </div>
       )}
