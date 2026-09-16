@@ -8,6 +8,7 @@ const updater = require('./updater');
 const { buildMenu } = require('./menu');
 
 const INDEX_HTML = path.join(__dirname, '../../build/index.html');
+const AUTH_LOADING_HTML = path.join(__dirname, 'auth-loading.html');
 // Derived from the updater's repo constant so the allowlist cannot drift away
 // from the release URLs the banner actually hands us.
 const RELEASES_URL_PREFIX = `https://github.com/${updater.REPO}`;
@@ -174,12 +175,71 @@ ipcMain.handle('clear-host-url', () => {
   return true;
 });
 
+
+// Signing out has two jobs and only one of them is reliable, so they are
+// ordered accordingly.
+//
+// clearStorageData() never settles while this session is live — it neither
+// resolves nor rejects — so anything sequenced after it is unreachable. The
+// reload is what returns the user to the login screen, so it runs first and
+// unconditionally. Sequencing it after the clear left the window sitting on a
+// signed-out embed indefinitely. Reloading first does not rescue the clear
+// either; it still times out.
+//
+// The ThoughtSpot session is already ended server-side by the SDK's logout()
+// that runs before this handler, so a clear that fails here leaves cached data
+// and identity-provider cookies behind rather than an active app session. The
+// cookies are the part worth fighting for: while they survive, a later sign-in
+// can be answered by the identity provider without re-authenticating. Removing
+// them one at a time completes against a copy of a real profile, where the bulk
+// clear is what stalls — it has not yet been confirmed against a live session,
+// so it is attempted on a timeout rather than relied on. Everything here is
+// bounded, so logout can never hang again whatever the outcome.
+const LOGOUT_CLEAR_TIMEOUT_MS = 5000;
+
+function withTimeout(promise, label) {
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => {
+      setTimeout(() => reject(new Error(`${label} timed out after ${LOGOUT_CLEAR_TIMEOUT_MS}ms`)), LOGOUT_CLEAR_TIMEOUT_MS);
+    }),
+  ]);
+}
+
+async function removeAllCookies(ses) {
+  for (const cookie of await ses.cookies.get({})) {
+    const host = cookie.domain.replace(/^\./, '');
+    const url = `http${cookie.secure ? 's' : ''}://${host}${cookie.path}`;
+    // One bad cookie must not strand the rest.
+    try { await ses.cookies.remove(url, cookie.name); } catch { /* next */ }
+  }
+}
+
 ipcMain.handle('logout', async () => {
-  await session.defaultSession.clearStorageData();
-  await session.defaultSession.clearCache();
-  await session.defaultSession.clearAuthCache();
   config.update({ authToken: undefined, loggedIn: undefined });
-  if (mainWindow) mainWindow.loadFile(INDEX_HTML);
+
+  if (mainWindow) {
+    try {
+      await mainWindow.loadFile(INDEX_HTML);
+    } catch (err) {
+      console.error('Could not reload after logout:', err?.message || err);
+    }
+  }
+
+  const ses = session.defaultSession;
+
+  try {
+    await withTimeout(removeAllCookies(ses), 'Cookie removal');
+  } catch (err) {
+    console.error('Logout:', err?.message || err);
+  }
+
+  // Started rather than awaited: these are the calls that do not settle, and
+  // the handler must not be held open by a promise that never resolves. They
+  // clear what they can in the background.
+  ses.clearStorageData().catch(() => { /* best effort */ });
+  ses.clearCache().catch(() => { /* best effort */ });
+  ses.clearAuthCache().catch(() => { /* best effort */ });
 });
 
 // ---------- Orgs ----------
@@ -258,6 +318,9 @@ ipcMain.handle('open-auth-window', async () => {
       width: 520,
       height: 680,
       title: 'Sign in to ThoughtSpot',
+      // Without this the window paints its default white before the first
+      // document arrives, which reads as a broken window rather than a wait.
+      backgroundColor: '#ffffff',
       webPreferences: {
         nodeIntegration: false,
         contextIsolation: true,
@@ -266,7 +329,19 @@ ipcMain.handle('open-auth-window', async () => {
       },
     });
 
-    authWin.loadURL(`${tsHost}/callosum/v1/oidc/login`);
+    // Reaching the identity provider is network-bound and can take several
+    // seconds, during which the window would otherwise be an empty rectangle.
+    // Paint a local splash first and let the real navigation replace it when it
+    // commits. Awaiting the splash matters: starting both at once cancels the
+    // file:// load before it is on screen.
+    //
+    // The file:// navigation is ignored by the did-navigate completion check
+    // below, which only accepts URLs on the ThoughtSpot origin.
+    authWin.loadFile(AUTH_LOADING_HTML)
+      .catch(() => { /* a missing splash must not block signing in */ })
+      .then(() => {
+        if (!authWin.isDestroyed()) authWin.loadURL(`${tsHost}/callosum/v1/oidc/login`);
+      });
 
     // Some identity providers open the login step with window.open. Keep it inside
     // this window so the resulting cookies land in the shared session, instead of
