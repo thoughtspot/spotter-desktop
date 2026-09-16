@@ -1,20 +1,13 @@
 name: Verify Code Signing
 
-# Isolates the code-signing step of a release: imports the Developer ID
-# certificate from CSC_LINK and signs the app, without notarizing and without
-# publishing anything.
+# Proves out the release signing path without notarizing or publishing.
 #
-# It exists because signing and notarization use different credentials, and a
-# 1.7.0 release failed at signing while the notarization credentials were
-# confirmed good. `builder_version` allows pinning electron-builder to an older
-# release, to tell an expired certificate apart from a regression in the tool.
+# Kept after the 1.7.0 signing failure because nothing local exercises this:
+# local builds sign from the developer's own keychain via APPLE_IDENTITY, so
+# CSC_LINK and CSC_KEY_PASSWORD are only ever used here. Run it after touching
+# anything to do with signing, and before tagging a release.
 on:
   workflow_dispatch:
-    inputs:
-      builder_version:
-        description: 'electron-builder version to test (blank = the lockfile version)'
-        required: false
-        default: ''
 
 jobs:
   sign:
@@ -29,65 +22,30 @@ jobs:
 
       - run: npm ci
 
-      - name: Override electron-builder version
-        if: inputs.builder_version != ''
-        run: |
-          echo "Testing electron-builder@${{ inputs.builder_version }}"
-          npm install --no-save --no-audit --no-fund "electron-builder@${{ inputs.builder_version }}"
-
       - name: Report versions
         run: |
           echo "electron-builder: $(npx electron-builder --version)"
-          echo "runner macOS: $(sw_vers -productVersion)"
+          echo "runner macOS: $(sw_vers -productVersion) (Darwin $(uname -r))"
 
-      # Tests CSC_LINK and CSC_KEY_PASSWORD on their own, before electron-builder
-      # is involved. The failure being investigated is a SecKeychainUnlock
-      # rejection during electron-builder's keychain setup, which can mean either
-      # a wrong certificate password or a problem in how the tool drives the
-      # keychain. Importing by hand separates the two: if this succeeds and
-      # electron-builder still fails, the credentials are not at fault.
-      - name: Check the certificate independently
+      - name: Set up the signing keychain
         env:
           CSC_LINK: ${{ secrets.CSC_LINK }}
           CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
-        run: |
-          echo "$CSC_LINK" | base64 --decode > /tmp/cert.p12 2>/dev/null || {
-            echo "::error::CSC_LINK is not valid base64"; exit 1; }
-          echo "decoded certificate: $(wc -c < /tmp/cert.p12) bytes"
-
-          KC=/tmp/probe.keychain-db
-          KC_PASS=$(uuidgen)
-          security create-keychain -p "$KC_PASS" "$KC"
-          security unlock-keychain -p "$KC_PASS" "$KC"
-
-          if security import /tmp/cert.p12 -k "$KC" -P "$CSC_KEY_PASSWORD" \
-               -T /usr/bin/codesign -T /usr/bin/security 2>/tmp/import.err; then
-            echo "✅ CSC_KEY_PASSWORD is correct — the certificate imported."
-            security find-identity -v -p codesigning "$KC" | sed -E 's/[A-F0-9]{40}/<hash>/'
-          else
-            echo "::error::Importing the certificate failed:"
-            sed -E 's/[A-F0-9]{40}/<hash>/' /tmp/import.err
-            echo "A wrong CSC_KEY_PASSWORD reports 'MAC verification failed'."
-            rm -f /tmp/cert.p12
-            exit 1
-          fi
-          rm -f /tmp/cert.p12
+        run: .github/scripts/setup-keychain.sh
 
       - run: npm run build
 
-      # --dir stops before the dmg, which is all that is needed: signing has
-      # already happened by then. The Apple notarization credentials are
-      # deliberately not provided, so that step is skipped and the run stays
-      # fast and focused on the certificate.
-      - name: Sign only
+      # CSC_LINK is deliberately absent: given it, electron-builder imports the
+      # certificate into a keychain of its own, which is the step that fails on
+      # this runner image. CSC_KEYCHAIN and CSC_NAME point it at the keychain
+      # prepared above instead.
+      - name: Sign
         env:
-          CSC_LINK: ${{ secrets.CSC_LINK }}
-          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
           MIXPANEL_TOKEN: ${{ secrets.MIXPANEL_TOKEN }}
         run: npx electron-builder --mac --dir --publish never
 
       - name: Confirm the signature
         run: |
           codesign --verify --deep --strict --verbose=2 dist/mac-arm64/Spotter.app
-          echo "---"
           codesign -dvv dist/mac-arm64/Spotter.app 2>&1 | grep -E "Authority|TeamIdentifier" || true
+          echo "✅ signed"
