@@ -44,7 +44,13 @@ if [ -z "$IDENTITY" ]; then
 fi
 echo "signing identity: $IDENTITY"
 
+# electron-builder rejects a CSC_NAME carrying the certificate-type prefix —
+# it picks the certificate type itself and wants only the name. `security`
+# prints the full string, so strip it back off.
+CSC_NAME="${IDENTITY#Developer ID Application: }"
+echo "CSC_NAME: $CSC_NAME"
+
 {
   echo "CSC_KEYCHAIN=$KEYCHAIN"
-  echo "CSC_NAME=$IDENTITY"
+  echo "CSC_NAME=$CSC_NAME"
 } >> "$GITHUB_ENV"
