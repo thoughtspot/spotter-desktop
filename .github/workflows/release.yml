@@ -25,13 +25,24 @@ jobs:
 
       - run: npm run lint
 
+      # Imports the Developer ID certificate into a keychain this workflow owns
+      # and exports CSC_KEYCHAIN/CSC_NAME. electron-builder's own import fails on
+      # current runner images — see the script for the detail. Verify changes to
+      # signing through the Verify Code Signing workflow, which shares this
+      # script, rather than by tagging a release.
+      - name: Set up the signing keychain
+        env:
+          # Developer ID certificate exported as base64-encoded .p12
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+        run: .github/scripts/setup-keychain.sh
+
+      # CSC_LINK is deliberately not passed here: given it, electron-builder
+      # re-imports the certificate into a keychain of its own and fails.
       - name: Build, sign, notarize and publish
         run: npm run release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # Developer ID certificate exported as base64-encoded .p12
-          CSC_LINK: ${{ secrets.CSC_LINK }}
-          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
           # Notarization. electron-builder reads these directly — see
           # app-builder-lib getNotarizeOptions(). App-specific passwords get
           # revoked and expire; an App Store Connect API key does not, and is
