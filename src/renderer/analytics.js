@@ -47,16 +47,47 @@ export function initAnalytics() {
 // Called once the ThoughtSpot session is known. Identity is the ThoughtSpot user
 // GUID; the instance hostname and build metadata ride along as super properties
 // so every later event carries them without being passed explicitly.
-export function identify({ userGUID, host, appVersion, platform }) {
+export function identify({
+  userGUID, host, clusterName, clusterVersion, appVersion, platform, arch,
+  email, displayName, accountType, isFirstLogin,
+}) {
   if (!ready) return;
   try {
     if (userGUID) mixpanel.identify(userGUID);
     mixpanel.register({
       ts_host: host,
+      // The cluster's own name, which is what people call it in conversation;
+      // ts_host stays because a renamed cluster keeps its hostname and vice
+      // versa, so neither one identifies an instance on its own.
+      cluster_name: clusterName,
+      // What the cluster actually reports, rather than the lower bound the
+      // `signal` property on Answer Completed infers from which completion
+      // event fired.
+      cluster_version: clusterVersion,
       app_version: appVersion,
       platform,
+      arch,
+      // How this user signs in, which on a desktop app that leans on SSO is
+      // the difference between auth paths rather than a user attribute.
+      account_type: accountType,
+      // Registered rather than set on the profile so events from a first
+      // session can be told apart later; as a profile property it would be
+      // overwritten on the next launch and lose exactly that.
+      is_first_login: isFirstLogin,
       surface: 'spotter-desktop',
     });
+    // Identity attributes go on the profile rather than onto every event.
+    // Mixpanel joins profile properties into event queries anyway, so
+    // registering them as super properties would copy an email address onto
+    // every row for no extra analytical reach.
+    //
+    // $email and $name are Mixpanel's reserved names — spelled this way they
+    // populate the profile view and are what cohort filters and notifications
+    // expect; any other spelling is just an opaque custom property.
+    const profile = {};
+    if (email) profile.$email = email;
+    if (displayName) profile.$name = displayName;
+    if (Object.keys(profile).length) mixpanel.people.set(profile);
   } catch (err) {
     console.error('Mixpanel identify failed:', err?.message || err);
   }

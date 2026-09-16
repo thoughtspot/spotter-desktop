@@ -10,6 +10,8 @@ function subscribe(channel, callback) {
 
 contextBridge.exposeInMainWorld('electronAPI', {
   platform: process.platform,
+  // arm64 vs x64 — which of the two Mac builds this user is actually running.
+  arch: process.arch,
   logout: () => ipcRenderer.invoke('logout'),
   getHostUrl: () => ipcRenderer.invoke('get-host-url'),
   setHostUrl: (url) => ipcRenderer.invoke('set-host-url', url),
@@ -22,6 +24,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   notifyResponseComplete: () => ipcRenderer.send('notify-response-complete'),
   getAppVersion: () => ipcRenderer.invoke('get-app-version'),
   getOrgs: () => ipcRenderer.invoke('get-orgs'),
+  getCurrentUser: () => ipcRenderer.invoke('get-current-user'),
   switchOrg: (id) => ipcRenderer.invoke('switch-org', id),
   confirmOrgSwitch: (name) => ipcRenderer.invoke('confirm-org-switch', name),
   getLoggedIn: () => ipcRenderer.invoke('get-logged-in'),
