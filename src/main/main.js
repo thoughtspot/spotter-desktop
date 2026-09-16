@@ -191,10 +191,11 @@ ipcMain.handle('clear-host-url', () => {
 // and identity-provider cookies behind rather than an active app session. The
 // cookies are the part worth fighting for: while they survive, a later sign-in
 // can be answered by the identity provider without re-authenticating. Removing
-// them one at a time completes against a copy of a real profile, where the bulk
-// clear is what stalls — it has not yet been confirmed against a live session,
-// so it is attempted on a timeout rather than relied on. Everything here is
-// bounded, so logout can never hang again whatever the outcome.
+// them one at a time does complete where the bulk clear stalls — a real logout
+// went from leaving nine cookies behind, identity provider included, to none.
+// It keeps the timeout anyway: the reason the bulk call stalls is still not
+// understood, so this one is not assumed immune. Everything here is bounded, so
+// logout cannot hang again whatever the storage layer does.
 const LOGOUT_CLEAR_TIMEOUT_MS = 5000;
 
 function withTimeout(promise, label) {
