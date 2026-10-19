@@ -1,4 +1,4 @@
-import { useCallback, useRef } from 'react';
+import { useCallback, useMemo, useRef } from 'react';
 
 // Whether the user has asked anything in the conversation currently on screen.
 // Switching Org reloads the embed and discards it, so this decides whether that
@@ -18,8 +18,10 @@ export function useConversationActivity() {
   const hasAsked = useCallback(() => asked.current, []);
   const reset = useCallback(() => { asked.current = false; }, []);
 
+  const handlers = useMemo(() => ({ onSpotterQueryTriggered: onStart }), [onStart]);
+
   return {
-    handlers: { onSpotterQueryTriggered: onStart },
+    handlers,
     hasAsked,
     reset,
   };

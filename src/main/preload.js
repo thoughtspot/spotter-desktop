@@ -28,7 +28,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   switchOrg: (id) => ipcRenderer.invoke('switch-org', id),
   confirmOrgSwitch: (name) => ipcRenderer.invoke('confirm-org-switch', name),
   getLoggedIn: () => ipcRenderer.invoke('get-logged-in'),
+  // true, false, or null when the cluster could not be reached.
+  isSessionActive: () => ipcRenderer.invoke('is-session-active'),
   setLoggedIn: (v) => ipcRenderer.invoke('set-logged-in', v),
   onMenuAction: (callback) => subscribe('menu-action', callback),
   onUpdateAvailable: (callback) => subscribe('update-available', callback),
+  onSessionExpired: (callback) => subscribe('session-expired', callback),
 });

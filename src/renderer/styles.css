@@ -1,6 +1,9 @@
-/* Design tokens. Light only for now — the dark theme was removed pending a
- * visual pass against a live instance. */
+/* Design tokens. Light by default; the dark set below follows the macOS
+ * appearance, which is also what the embedded Spotter follows unless the user
+ * picked a theme in ThoughtSpot itself. The dark neutrals are taken from
+ * ThoughtSpot's own dark surfaces so the chrome and the embed read as one. */
 :root {
+  color-scheme: light dark;
   --bg: #ffffff;
   --bg-elevated: #f8fafc;
   --border: #e2e8f0;
@@ -28,6 +31,33 @@
   --titlebar-control-border: rgba(255, 255, 255, 0.2);
   --titlebar-control-border-hover: rgba(255, 255, 255, 0.4);
   --titlebar-control-hover-bg: rgba(255, 255, 255, 0.1);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #1f2024;
+    --bg-elevated: #27282d;
+    --border: #34363c;
+    --text: #e3e5e8;
+    --text-strong: #f3f4f6;
+    --text-muted: rgba(243, 244, 246, 0.65);
+    --text-subtle: rgba(243, 244, 246, 0.45);
+    --text-faint: rgba(243, 244, 246, 0.32);
+    --control-border: rgba(243, 244, 246, 0.18);
+    --control-border-hover: rgba(243, 244, 246, 0.34);
+    --control-hover-bg: rgba(243, 244, 246, 0.08);
+    --accent: #3b82f6;
+    --accent-hover: #60a5fa;
+    --accent-muted: #2a4a80;
+    --danger: #f87171;
+    --spinner-track: rgba(243, 244, 246, 0.1);
+    --shadow: rgba(0, 0, 0, 0.45);
+
+    /* Against a dark body the navy strip would barely separate, so it drops
+       to the darkest neutral and keeps a visible border instead. */
+    --titlebar-bg: #16171a;
+    --titlebar-border: #2a2c31;
+  }
 }
 
 * {
@@ -234,6 +264,19 @@ html, body, #root {
   font-size: 12px;
   color: var(--danger);
   text-align: left;
+}
+
+/* Why the sign-in screen came back. Informational, not an error: nothing went
+   wrong, the session simply ran out. */
+.setup-notice {
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-muted);
+  padding: 10px 12px;
+  margin-bottom: 16px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-elevated);
 }
 
 .setup-button {

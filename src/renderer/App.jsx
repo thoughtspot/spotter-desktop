@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback, useRef } from 'react';
+import React, { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import { init, Action, AuthType, AuthStatus, logout, getSessionInfo } from '@thoughtspot/visual-embed-sdk';
 import { SpotterEmbed, useEmbedRef } from '@thoughtspot/visual-embed-sdk/react';
 import { useAnswerNotification } from './useAnswerNotification';
@@ -214,7 +214,7 @@ function SetupPage({ onConnect }) {
 
 // ---------- Login page ----------
 
-function LoginPage({ tsHost, onAuthDone, onBack }) {
+function LoginPage({ tsHost, sessionExpired, onAuthDone, onBack }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
@@ -250,6 +250,11 @@ function LoginPage({ tsHost, onAuthDone, onBack }) {
           </div>
           <h1 className="setup-title">Sign in to ThoughtSpot</h1>
           <p className="setup-subtitle">{hostLabel}</p>
+          {sessionExpired && (
+            <p className="setup-notice" role="status">
+              Your session has expired. Sign in again to continue.
+            </p>
+          )}
           <button
             className="setup-button"
             onClick={handleSignIn}
@@ -330,12 +335,30 @@ function SpotterPage({ tsHost, appVersion, onSignOut, onAuthLost }) {
   const analytics = useSpotterAnalytics();
   const shareAnalytics = useShareAnalytics();
   const { handlers: errorHandlers, fatal: embedFailed, reset: resetEmbedError } = useEmbedErrors();
+  // The embed reports these when ThoughtSpot itself notices the session is
+  // gone. With AuthType.None the SDK only forwards them as events and never
+  // raises AuthStatus.FAILURE, so they are listened to directly.
+  const authHandlers = useMemo(() => ({
+    onAuthFailure: () => onAuthLost('embed-auth-failure'),
+    onAuthExpire: () => onAuthLost('embed-auth-expire'),
+    onIdleSessionTimeout: () => onAuthLost('embed-idle-timeout'),
+  }), [onAuthLost]);
   const { handlers: conversationHandlers, hasAsked, reset: resetConversation } = useConversationActivity();
   const { orgs, currentOrgId, switching, error: orgError, epoch, switchTo } = useOrgs({
     tsHost,
     enabled: sdkReady,
   });
   const hostLabel = getHostLabel(tsHost);
+
+  // The SDK's React wrapper deep-compares its listeners and, when any of them
+  // changes identity, destroys the iframe and builds a new one — reloading all
+  // of ThoughtSpot and dropping the conversation on screen. Merging inline gave
+  // fresh wrappers on every render, so the embed loaded twice on each launch as
+  // auth and Orgs settled. Every input map is memoized, so this one is too.
+  const embedHandlers = useMemo(
+    () => mergeHandlers(answerNotification, analytics, shareAnalytics, conversationHandlers, errorHandlers, authHandlers),
+    [answerNotification, analytics, shareAnalytics, conversationHandlers, errorHandlers, authHandlers],
+  );
 
   // Keep the analytics super property in step with the Org actually in view,
   // on first load as well as after a switch.
@@ -416,11 +439,14 @@ function SpotterPage({ tsHost, appVersion, onSignOut, onAuthLost }) {
                 spotterShareModalTitle: 'Share this conversation',
                 spotterShareEmptySubtitle: 'Not shared with anyone yet',
               }}
-              {...mergeHandlers(answerNotification, analytics, shareAnalytics, conversationHandlers, errorHandlers)}
+              {...embedHandlers}
               spotterSidebarConfig={{
                 enablePastConversationsSidebar: true,
                 spotterSidebarTitle: 'My Conversations',
                 spotterSidebarDefaultExpanded: false,
+                // Native Spotter ships pinning on; embeds have it off unless
+                // asked (26.10+). Older clusters ignore it.
+                spotterChatPinConfig: { enabled: true },
               }}
               // The sidebar footer's docs/"Best Practices" link points at the
               // ThoughtSpot help site, which has nowhere useful to go from a
@@ -440,6 +466,12 @@ function SpotterPage({ tsHost, appVersion, onSignOut, onAuthLost }) {
 export default function App() {
   const [tsHost, setTsHost] = useState(null);
   const [authDone, setAuthDone] = useState(false);
+  // Set when the app sends the user back to sign in because the session ran
+  // out, so the login screen can say why instead of looking like a bug.
+  const [sessionExpired, setSessionExpired] = useState(false);
+  // Several signals can report the same expiry — the embed navigating away and
+  // the embed's own auth event usually both fire — so only the first one acts.
+  const authDoneRef = useRef(false);
   const [checking, setChecking] = useState(true);
   const [updateInfo, setUpdateInfo] = useState(null);
   const [appVersion, setAppVersion] = useState(null);
@@ -448,13 +480,28 @@ export default function App() {
     initAnalytics();
     (async () => {
       const api = window.electronAPI;
-      const [saved, loggedIn, version] = await Promise.all([
+      const [saved, loggedIn, version, active] = await Promise.all([
         api?.getHostUrl?.() ?? null,
         api?.getLoggedIn?.() ?? false, // skip LoginPage if a previous session authenticated
         api?.getAppVersion?.() ?? null,
+        // The flag only says a sign-in once completed. Sessions expire, often
+        // overnight, and the SDK cannot tell us — so ask the cluster. Checked
+        // alongside the reads above so a valid session costs no extra wait.
+        api?.isSessionActive?.() ?? null,
       ]);
       if (saved) setTsHost(saved);
-      if (loggedIn) setAuthDone(true);
+      if (loggedIn && active === false) {
+        // Skipping sign-in here would load the embed into an identity-provider
+        // redirect it cannot complete.
+        await api?.setLoggedIn?.(false);
+        setSessionExpired(true);
+        track('Session Expired', { signal: 'launch-check' });
+      } else if (loggedIn) {
+        // Unreachable (null) is treated as still signed in: offline is not
+        // signed out, and the embed reports a real expiry once it can.
+        authDoneRef.current = true;
+        setAuthDone(true);
+      }
       setAppVersion(version);
       setChecking(false);
     })();
@@ -481,21 +528,36 @@ export default function App() {
 
   const handleAuthDone = useCallback(async () => {
     await window.electronAPI?.setLoggedIn(true);
+    authDoneRef.current = true;
+    setSessionExpired(false);
     setAuthDone(true);
   }, []);
 
-  const handleAuthLost = useCallback(async () => {
+  const handleAuthLost = useCallback(async (signal = 'sdk-auth-failure') => {
+    if (!authDoneRef.current) return;
+    authDoneRef.current = false;
+    track('Session Expired', { signal });
     await window.electronAPI?.setLoggedIn(false);
+    setSessionExpired(true);
     setAuthDone(false);
   }, []);
 
+  // The main process stops the embed from following ThoughtSpot to the
+  // identity provider and reports it here; see will-frame-navigate in main.js.
+  useEffect(() => window.electronAPI?.onSessionExpired?.(() => handleAuthLost('embed-navigation')), [handleAuthLost]);
+
   const handleDisconnect = useCallback(async () => {
+    authDoneRef.current = false;
     await window.electronAPI?.clearHostUrl();
     setTsHost(null);
+    setSessionExpired(false);
     setAuthDone(false);
   }, []);
 
   const handleSignOut = useCallback(async () => {
+    // Signing out ends the session the same way an expiry does, and the embed
+    // reacts the same way. Clear the ref first so that is not reported as one.
+    authDoneRef.current = false;
     try { logout(); } catch (e) { console.error('SDK logout error:', e); }
     await window.electronAPI?.logout();
   }, []);
@@ -532,7 +594,7 @@ export default function App() {
     return (
       <>
         {updateBanner}
-        <LoginPage tsHost={tsHost} onAuthDone={handleAuthDone} onBack={handleDisconnect} />
+        <LoginPage tsHost={tsHost} sessionExpired={sessionExpired} onAuthDone={handleAuthDone} onBack={handleDisconnect} />
       </>
     );
   }

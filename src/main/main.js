@@ -1,8 +1,9 @@
-const { app, BrowserWindow, Notification, dialog, session, ipcMain, shell, screen } = require('electron');
+const { app, BrowserWindow, Notification, dialog, session, ipcMain, shell, screen, nativeTheme, powerMonitor } = require('electron');
 const path = require('path');
 const config = require('./config');
 const orgs = require('./orgs');
 const user = require('./user');
+const auth = require('./auth');
 const { protocolOf, isSameOrigin, isValidHttpsUrl } = require('./urls');
 const updater = require('./updater');
 const { buildMenu } = require('./menu');
@@ -13,8 +14,11 @@ const AUTH_LOADING_HTML = path.join(__dirname, 'auth-loading.html');
 // from the release URLs the banner actually hands us.
 const RELEASES_URL_PREFIX = `https://github.com/${updater.REPO}`;
 
-// Matches the renderer's chrome color so the window does not flash on launch.
-const BACKGROUND = '#ffffff';
+// Match the renderer's --bg for the current appearance, so the window does not
+// flash the wrong color before the first paint. Mirrors styles.css.
+function windowBackground() {
+  return nativeTheme.shouldUseDarkColors ? '#1f2024' : '#ffffff';
+}
 const DEFAULT_BOUNDS = { width: 1440, height: 900 };
 
 let mainWindow = null;
@@ -46,6 +50,53 @@ function rememberBounds() {
       config.update({ bounds: mainWindow.getNormalBounds() });
     }
   }, 400);
+}
+
+// ---------- Response header rewriting ----------
+
+const CSP_HEADERS = [
+  'x-frame-options',
+  'content-security-policy',
+  'content-security-policy-report-only',
+];
+
+// Header names arrive in whatever case the server sent, so every lookup here is
+// case-insensitive rather than guessing at spellings.
+function withoutHeaders(responseHeaders, names) {
+  const headers = { ...responseHeaders };
+  for (const key of Object.keys(headers)) {
+    if (names.includes(key.toLowerCase())) delete headers[key];
+  }
+  return headers;
+}
+
+// A policy of `frame-ancestors *` consents to being framed by anyone, and
+// fails here only because `*` matches network schemes and this app's top page
+// is file://. Dropping that directive gives the frame what a browser would. A
+// policy that names its ancestors is a real refusal — an identity provider's
+// sign-in page, say — and is left alone, as is X-Frame-Options alongside it.
+function withoutWildcardFrameAncestors(responseHeaders) {
+  const headers = { ...responseHeaders };
+  let dropped = false;
+  for (const [key, value] of Object.entries(headers)) {
+    const name = key.toLowerCase();
+    if (name !== 'content-security-policy' && name !== 'content-security-policy-report-only') continue;
+    headers[key] = (Array.isArray(value) ? value : [value]).map((policy) => (
+      policy
+        .split(';')
+        .filter((directive) => {
+          const [directiveName, ...sources] = directive.trim().split(/\s+/);
+          const wildcard = directiveName.toLowerCase() === 'frame-ancestors' && sources.includes('*');
+          if (wildcard) dropped = true;
+          return !wildcard;
+        })
+        .join(';')
+    ));
+  }
+  // A CSP frame-ancestors directive takes precedence over X-Frame-Options, so
+  // a browser ignores X-Frame-Options here. Once the directive is gone it would
+  // start applying, and has to go with it.
+  return dropped ? withoutHeaders(headers, ['x-frame-options']) : responseHeaders;
 }
 
 // ---------- Session hardening ----------
@@ -91,15 +142,19 @@ function configureSession() {
   // Strip framing and CSP restrictions so the embed iframe works. Scoped to the
   // configured ThoughtSpot origin so third-party requests (e.g. OIDC providers)
   // keep their security headers.
+  //
+  // Nested frames on other origins keep their headers, with one exception.
+  // ThoughtSpot renders charts in an iframe on its own chart host, which allows
+  // `frame-ancestors *` — and `*` matches network schemes only, so the file://
+  // page this app runs on is not an allowed ancestor and Chromium blocks the
+  // frame. The embedded app then shows "Cannot display the chart". A browser
+  // never hits this because its page is served over https.
   defaultSession.webRequest.onHeadersReceived((details, callback) => {
-    if (!isSameOrigin(details.url, currentTsHost)) return callback({});
-    const headers = { ...details.responseHeaders };
-    delete headers['x-frame-options'];
-    delete headers['X-Frame-Options'];
-    delete headers['content-security-policy'];
-    delete headers['Content-Security-Policy'];
-    delete headers['content-security-policy-report-only'];
-    delete headers['Content-Security-Policy-Report-Only'];
+    const trusted = isSameOrigin(details.url, currentTsHost);
+    if (!trusted && details.resourceType !== 'subFrame') return callback({});
+    const headers = trusted
+      ? withoutHeaders(details.responseHeaders, CSP_HEADERS)
+      : withoutWildcardFrameAncestors(details.responseHeaders);
     callback({ responseHeaders: headers });
   });
 }
@@ -116,7 +171,7 @@ function createWindow() {
     minHeight: 600,
     titleBarStyle: 'hiddenInset',
     trafficLightPosition: { x: 16, y: 16 },
-    backgroundColor: BACKGROUND,
+    backgroundColor: windowBackground(),
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -138,6 +193,21 @@ function createWindow() {
   };
   mainWindow.webContents.on('will-navigate', blockExternalNavigation);
   mainWindow.webContents.on('will-redirect', blockExternalNavigation);
+
+  // When the ThoughtSpot session expires, the embedded app sends its own frame
+  // off to the identity provider. That page has no business inside the embed:
+  // it either refuses to be framed and leaves a dead area, or fails with an
+  // error, and if it did render it would be a password form with no address
+  // bar to show whose it is. Stop the navigation and hand the user to the
+  // sign-in window instead. Only the embed frame itself is checked — the chart
+  // frames nested inside it live on other origins by design.
+  mainWindow.webContents.on('will-frame-navigate', (details) => {
+    const { frame, url } = details;
+    const isEmbedFrame = frame?.parent && !frame.parent.parent;
+    if (!isEmbedFrame || protocolOf(url) === 'about:' || isSameOrigin(url, currentTsHost)) return;
+    details.preventDefault();
+    sendToRenderer('session-expired');
+  });
 
   mainWindow.on('resize', rememberBounds);
   mainWindow.on('move', rememberBounds);
@@ -272,6 +342,8 @@ ipcMain.handle('get-app-version', () => app.getVersion());
 
 ipcMain.handle('get-logged-in', () => config.read().loggedIn || false);
 
+ipcMain.handle('is-session-active', () => auth.isSessionActive());
+
 ipcMain.handle('set-logged-in', (_event, value) => {
   config.update({ loggedIn: !!value });
   return true;
@@ -321,7 +393,7 @@ ipcMain.handle('open-auth-window', async () => {
       title: 'Sign in to ThoughtSpot',
       // Without this the window paints its default white before the first
       // document arrives, which reads as a broken window rather than a wait.
-      backgroundColor: '#ffffff',
+      backgroundColor: windowBackground(),
       webPreferences: {
         nodeIntegration: false,
         contextIsolation: true,
@@ -379,7 +451,39 @@ ipcMain.handle('open-auth-window', async () => {
 
 const onUpdateReady = (info) => sendToRenderer('update-available', info);
 
-ipcMain.handle('check-for-updates', () => updater.checkForUpdates(onUpdateReady));
+// The renderer checks once at launch, but a dock app stays open for days and
+// would otherwise sit on an old build until it is quit. Keep checking in the
+// background, and again shortly after wake, since a long sleep has most likely
+// skipped a check. The delay gives the network time to come back first.
+const UPDATE_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000;
+const UPDATE_CHECK_AFTER_WAKE_MS = 30 * 1000;
+
+// Each version is announced once. A banner the user dismissed should not come
+// back every few hours for the same release.
+let announcedVersion = null;
+
+async function checkForUpdatesAndRemember() {
+  const info = await updater.checkForUpdates(onUpdateReady);
+  if (info?.version) announcedVersion = info.version;
+  return info;
+}
+
+async function checkForUpdatesInBackground() {
+  const previous = announcedVersion;
+  const info = await checkForUpdatesAndRemember();
+  if (info && info.version !== previous) sendToRenderer('update-available', info);
+}
+
+function scheduleUpdateChecks() {
+  setInterval(checkForUpdatesInBackground, UPDATE_CHECK_INTERVAL_MS);
+  let wakeTimer = null;
+  powerMonitor.on('resume', () => {
+    clearTimeout(wakeTimer);
+    wakeTimer = setTimeout(checkForUpdatesInBackground, UPDATE_CHECK_AFTER_WAKE_MS);
+  });
+}
+
+ipcMain.handle('check-for-updates', () => checkForUpdatesAndRemember());
 ipcMain.handle('install-update', () => updater.quitAndInstall());
 
 ipcMain.handle('open-external', (_event, url) => {
@@ -396,11 +500,19 @@ app.whenReady().then(() => {
     onSwitchInstance: () => sendToRenderer('menu-action', 'switch-instance'),
     onSignOut: () => sendToRenderer('menu-action', 'sign-out'),
     onCheckForUpdates: async () => {
-      const info = await updater.checkForUpdates(onUpdateReady);
+      // Asked for explicitly, so always answer — even with "up to date".
+      const info = await checkForUpdatesAndRemember();
       sendToRenderer('update-available', info || { mode: 'current' });
     },
   });
   createWindow();
+  scheduleUpdateChecks();
+
+  // The CSS follows the appearance on its own; the native window background
+  // shows through on resize and during reloads, so it has to follow too.
+  nativeTheme.on('updated', () => {
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.setBackgroundColor(windowBackground());
+  });
 });
 
 app.on('window-all-closed', () => {

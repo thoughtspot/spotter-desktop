@@ -1,4 +1,4 @@
-import { useCallback, useRef } from 'react';
+import { useCallback, useMemo, useRef } from 'react';
 
 // Tell the user an answer landed while they were away — the thing a desktop app
 // can do that a browser tab cannot.
@@ -26,11 +26,12 @@ export function useAnswerNotification() {
     window.electronAPI?.notifyResponseComplete();
   }, []);
 
-  // Spread straight onto <SpotterEmbed>.
-  return {
+  // Spread straight onto <SpotterEmbed>. Memoized because the embed rebuilds
+  // its iframe whenever a listener changes identity.
+  return useMemo(() => ({
     onSpotterQueryTriggered: onStart,
     onSpotterResponseComplete: onDone,
     onSpotterData: onDone,
     onData: onDone,
-  };
+  }), [onStart, onDone]);
 }
