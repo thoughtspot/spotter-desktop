@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Notification, dialog, session, ipcMain, shell, screen } = require('electron');
+const { app, BrowserWindow, Notification, dialog, session, ipcMain, shell, screen, powerMonitor } = require('electron');
 const path = require('path');
 const config = require('./config');
 const orgs = require('./orgs');
@@ -420,7 +420,39 @@ ipcMain.handle('open-auth-window', async () => {
 
 const onUpdateReady = (info) => sendToRenderer('update-available', info);
 
-ipcMain.handle('check-for-updates', () => updater.checkForUpdates(onUpdateReady));
+// The renderer checks once at launch, but a dock app stays open for days and
+// would otherwise sit on an old build until it is quit. Keep checking in the
+// background, and again shortly after wake, since a long sleep has most likely
+// skipped a check. The delay gives the network time to come back first.
+const UPDATE_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000;
+const UPDATE_CHECK_AFTER_WAKE_MS = 30 * 1000;
+
+// Each version is announced once. A banner the user dismissed should not come
+// back every few hours for the same release.
+let announcedVersion = null;
+
+async function checkForUpdatesAndRemember() {
+  const info = await updater.checkForUpdates(onUpdateReady);
+  if (info?.version) announcedVersion = info.version;
+  return info;
+}
+
+async function checkForUpdatesInBackground() {
+  const previous = announcedVersion;
+  const info = await checkForUpdatesAndRemember();
+  if (info && info.version !== previous) sendToRenderer('update-available', info);
+}
+
+function scheduleUpdateChecks() {
+  setInterval(checkForUpdatesInBackground, UPDATE_CHECK_INTERVAL_MS);
+  let wakeTimer = null;
+  powerMonitor.on('resume', () => {
+    clearTimeout(wakeTimer);
+    wakeTimer = setTimeout(checkForUpdatesInBackground, UPDATE_CHECK_AFTER_WAKE_MS);
+  });
+}
+
+ipcMain.handle('check-for-updates', () => checkForUpdatesAndRemember());
 ipcMain.handle('install-update', () => updater.quitAndInstall());
 
 ipcMain.handle('open-external', (_event, url) => {
@@ -437,11 +469,13 @@ app.whenReady().then(() => {
     onSwitchInstance: () => sendToRenderer('menu-action', 'switch-instance'),
     onSignOut: () => sendToRenderer('menu-action', 'sign-out'),
     onCheckForUpdates: async () => {
-      const info = await updater.checkForUpdates(onUpdateReady);
+      // Asked for explicitly, so always answer — even with "up to date".
+      const info = await checkForUpdatesAndRemember();
       sendToRenderer('update-available', info || { mode: 'current' });
     },
   });
   createWindow();
+  scheduleUpdateChecks();
 });
 
 app.on('window-all-closed', () => {
