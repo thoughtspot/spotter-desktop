@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback, useRef } from 'react';
+import React, { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import { init, Action, AuthType, AuthStatus, logout, getSessionInfo } from '@thoughtspot/visual-embed-sdk';
 import { SpotterEmbed, useEmbedRef } from '@thoughtspot/visual-embed-sdk/react';
 import { useAnswerNotification } from './useAnswerNotification';
@@ -337,6 +337,16 @@ function SpotterPage({ tsHost, appVersion, onSignOut, onAuthLost }) {
   });
   const hostLabel = getHostLabel(tsHost);
 
+  // The SDK's React wrapper deep-compares its listeners and, when any of them
+  // changes identity, destroys the iframe and builds a new one — reloading all
+  // of ThoughtSpot and dropping the conversation on screen. Merging inline gave
+  // fresh wrappers on every render, so the embed loaded twice on each launch as
+  // auth and Orgs settled. Every input map is memoized, so this one is too.
+  const embedHandlers = useMemo(
+    () => mergeHandlers(answerNotification, analytics, shareAnalytics, conversationHandlers, errorHandlers),
+    [answerNotification, analytics, shareAnalytics, conversationHandlers, errorHandlers],
+  );
+
   // Keep the analytics super property in step with the Org actually in view,
   // on first load as well as after a switch.
   const currentOrgName = orgs.find((org) => org.id === currentOrgId)?.name;
@@ -416,7 +426,7 @@ function SpotterPage({ tsHost, appVersion, onSignOut, onAuthLost }) {
                 spotterShareModalTitle: 'Share this conversation',
                 spotterShareEmptySubtitle: 'Not shared with anyone yet',
               }}
-              {...mergeHandlers(answerNotification, analytics, shareAnalytics, conversationHandlers, errorHandlers)}
+              {...embedHandlers}
               spotterSidebarConfig={{
                 enablePastConversationsSidebar: true,
                 spotterSidebarTitle: 'My Conversations',

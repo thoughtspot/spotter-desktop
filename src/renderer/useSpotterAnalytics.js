@@ -1,4 +1,4 @@
-import { useCallback, useRef } from 'react';
+import { useCallback, useMemo, useRef } from 'react';
 import { track } from './analytics';
 
 // Spotter usage events, read from the same embed signals the answer notification
@@ -24,11 +24,12 @@ export function useSpotterAnalytics() {
     track('Answer Completed', { duration_ms: durationMs, signal });
   }, []);
 
-  // Spread straight onto <SpotterEmbed>.
-  return {
+  // Spread straight onto <SpotterEmbed>. Memoized because the embed rebuilds
+  // its iframe whenever a listener changes identity.
+  return useMemo(() => ({
     onSpotterQueryTriggered: onStart,
     onSpotterResponseComplete: () => complete('SpotterResponseComplete'),
     onSpotterData: () => complete('SpotterData'),
     onData: () => complete('Data'),
-  };
+  }), [onStart, complete]);
 }

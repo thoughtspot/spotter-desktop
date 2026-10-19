@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { EmbedErrorSeverity } from '@thoughtspot/visual-embed-sdk';
 import { track } from './analytics';
 
@@ -36,5 +36,7 @@ export function useEmbedErrors() {
   // on its own terms rather than inheriting the old one's error screen.
   const reset = useCallback(() => setFatal(false), []);
 
-  return { handlers: { onError }, fatal, reset };
+  const handlers = useMemo(() => ({ onError }), [onError]);
+
+  return { handlers, fatal, reset };
 }
