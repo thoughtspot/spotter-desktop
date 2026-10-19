@@ -19,6 +19,17 @@ const RELEASES_URL_PREFIX = `https://github.com/${updater.REPO}`;
 function windowBackground() {
   return nativeTheme.shouldUseDarkColors ? '#1f2024' : '#ffffff';
 }
+
+// The titlebar's appearance switch. themeSource is what prefers-color-scheme
+// reports to every page in the app, so this one value themes the app's own
+// screens and the embedded Spotter together — the embed follows the system
+// color scheme unless the user picked a theme in ThoughtSpot itself.
+const APPEARANCES = ['system', 'light', 'dark'];
+
+function savedAppearance() {
+  const { appearance } = config.read();
+  return APPEARANCES.includes(appearance) ? appearance : 'system';
+}
 const DEFAULT_BOUNDS = { width: 1440, height: 900 };
 
 let mainWindow = null;
@@ -340,6 +351,16 @@ ipcMain.handle('confirm-org-switch', async (_event, orgName) => {
 
 ipcMain.handle('get-app-version', () => app.getVersion());
 
+ipcMain.handle('get-appearance', () => savedAppearance());
+
+ipcMain.handle('set-appearance', (_event, appearance) => {
+  if (!APPEARANCES.includes(appearance)) return savedAppearance();
+  config.update({ appearance });
+  // 'updated' fires next, which repaints the window background below.
+  nativeTheme.themeSource = appearance;
+  return appearance;
+});
+
 ipcMain.handle('get-logged-in', () => config.read().loggedIn || false);
 
 ipcMain.handle('is-session-active', () => auth.isSessionActive());
@@ -495,6 +516,8 @@ ipcMain.handle('open-external', (_event, url) => {
 // ---------- Lifecycle ----------
 
 app.whenReady().then(() => {
+  // Before the window exists, so its first paint already uses the saved choice.
+  nativeTheme.themeSource = savedAppearance();
   configureSession();
   buildMenu({
     onSwitchInstance: () => sendToRenderer('menu-action', 'switch-instance'),
