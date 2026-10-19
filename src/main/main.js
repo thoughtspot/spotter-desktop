@@ -69,22 +69,33 @@ function withoutHeaders(responseHeaders, names) {
   return headers;
 }
 
-// Drop frame-ancestors from a CSP while leaving the directives that protect the
-// framed page itself — script-src, connect-src and the rest — in force.
-function withoutFrameAncestors(responseHeaders) {
-  const headers = withoutHeaders(responseHeaders, ['x-frame-options']);
+// A policy of `frame-ancestors *` consents to being framed by anyone, and
+// fails here only because `*` matches network schemes and this app's top page
+// is file://. Dropping that directive gives the frame what a browser would. A
+// policy that names its ancestors is a real refusal — an identity provider's
+// sign-in page, say — and is left alone, as is X-Frame-Options alongside it.
+function withoutWildcardFrameAncestors(responseHeaders) {
+  const headers = { ...responseHeaders };
+  let dropped = false;
   for (const [key, value] of Object.entries(headers)) {
     const name = key.toLowerCase();
     if (name !== 'content-security-policy' && name !== 'content-security-policy-report-only') continue;
-    const policies = (Array.isArray(value) ? value : [value]).map((policy) => (
+    headers[key] = (Array.isArray(value) ? value : [value]).map((policy) => (
       policy
         .split(';')
-        .filter((directive) => directive.trim().split(/\s+/)[0].toLowerCase() !== 'frame-ancestors')
+        .filter((directive) => {
+          const [directiveName, ...sources] = directive.trim().split(/\s+/);
+          const wildcard = directiveName.toLowerCase() === 'frame-ancestors' && sources.includes('*');
+          if (wildcard) dropped = true;
+          return !wildcard;
+        })
         .join(';')
     ));
-    headers[key] = policies;
   }
-  return headers;
+  // A CSP frame-ancestors directive takes precedence over X-Frame-Options, so
+  // a browser ignores X-Frame-Options here. Once the directive is gone it would
+  // start applying, and has to go with it.
+  return dropped ? withoutHeaders(headers, ['x-frame-options']) : responseHeaders;
 }
 
 // ---------- Session hardening ----------
@@ -131,8 +142,7 @@ function configureSession() {
   // configured ThoughtSpot origin so third-party requests (e.g. OIDC providers)
   // keep their security headers.
   //
-  // Nested frames on other origins get a narrower treatment: only the rules that
-  // decide who may frame them are dropped, and the rest of their policy stands.
+  // Nested frames on other origins keep their headers, with one exception.
   // ThoughtSpot renders charts in an iframe on its own chart host, which allows
   // `frame-ancestors *` — and `*` matches network schemes only, so the file://
   // page this app runs on is not an allowed ancestor and Chromium blocks the
@@ -143,7 +153,7 @@ function configureSession() {
     if (!trusted && details.resourceType !== 'subFrame') return callback({});
     const headers = trusted
       ? withoutHeaders(details.responseHeaders, CSP_HEADERS)
-      : withoutFrameAncestors(details.responseHeaders);
+      : withoutWildcardFrameAncestors(details.responseHeaders);
     callback({ responseHeaders: headers });
   });
 }
