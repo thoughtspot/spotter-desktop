@@ -266,6 +266,19 @@ html, body, #root {
   text-align: left;
 }
 
+/* Why the sign-in screen came back. Informational, not an error: nothing went
+   wrong, the session simply ran out. */
+.setup-notice {
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-muted);
+  padding: 10px 12px;
+  margin-bottom: 16px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-elevated);
+}
+
 .setup-button {
   width: 100%;
   padding: 14px;

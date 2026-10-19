@@ -3,6 +3,7 @@ const path = require('path');
 const config = require('./config');
 const orgs = require('./orgs');
 const user = require('./user');
+const auth = require('./auth');
 const { protocolOf, isSameOrigin, isValidHttpsUrl } = require('./urls');
 const updater = require('./updater');
 const { buildMenu } = require('./menu');
@@ -193,6 +194,21 @@ function createWindow() {
   mainWindow.webContents.on('will-navigate', blockExternalNavigation);
   mainWindow.webContents.on('will-redirect', blockExternalNavigation);
 
+  // When the ThoughtSpot session expires, the embedded app sends its own frame
+  // off to the identity provider. That page has no business inside the embed:
+  // it either refuses to be framed and leaves a dead area, or fails with an
+  // error, and if it did render it would be a password form with no address
+  // bar to show whose it is. Stop the navigation and hand the user to the
+  // sign-in window instead. Only the embed frame itself is checked — the chart
+  // frames nested inside it live on other origins by design.
+  mainWindow.webContents.on('will-frame-navigate', (details) => {
+    const { frame, url } = details;
+    const isEmbedFrame = frame?.parent && !frame.parent.parent;
+    if (!isEmbedFrame || protocolOf(url) === 'about:' || isSameOrigin(url, currentTsHost)) return;
+    details.preventDefault();
+    sendToRenderer('session-expired');
+  });
+
   mainWindow.on('resize', rememberBounds);
   mainWindow.on('move', rememberBounds);
 
@@ -325,6 +341,8 @@ ipcMain.handle('confirm-org-switch', async (_event, orgName) => {
 ipcMain.handle('get-app-version', () => app.getVersion());
 
 ipcMain.handle('get-logged-in', () => config.read().loggedIn || false);
+
+ipcMain.handle('is-session-active', () => auth.isSessionActive());
 
 ipcMain.handle('set-logged-in', (_event, value) => {
   config.update({ loggedIn: !!value });
