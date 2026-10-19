@@ -23,6 +23,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Fire and forget — nothing to await, no reply.
   notifyResponseComplete: () => ipcRenderer.send('notify-response-complete'),
   getAppVersion: () => ipcRenderer.invoke('get-app-version'),
+  // 'system', 'light' or 'dark'.
+  getAppearance: () => ipcRenderer.invoke('get-appearance'),
+  setAppearance: (appearance) => ipcRenderer.invoke('set-appearance', appearance),
   getOrgs: () => ipcRenderer.invoke('get-orgs'),
   getCurrentUser: () => ipcRenderer.invoke('get-current-user'),
   switchOrg: (id) => ipcRenderer.invoke('switch-org', id),

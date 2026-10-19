@@ -136,6 +136,12 @@ html, body, #root {
   transition: background 0.2s, border-color 0.2s;
 }
 
+.titlebar-btn--icon {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
 .titlebar-btn:hover {
   background: var(--titlebar-control-hover-bg);
   border-color: var(--titlebar-control-border-hover);

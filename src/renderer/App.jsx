@@ -8,6 +8,7 @@ import { useShareAnalytics } from './useShareAnalytics';
 import { useEmbedErrors } from './useEmbedErrors';
 import { useOrgs } from './useOrgs';
 import { OrgSwitcher } from './OrgSwitcher';
+import { AppearanceButton } from './AppearanceButton';
 import { initAnalytics, identify, track, setOrg } from './analytics';
 import tsLogo from './logo.png';
 
@@ -392,6 +393,7 @@ function SpotterPage({ tsHost, appVersion, onSignOut, onAuthLost }) {
             error={orgError}
             onSelect={handleSelectOrg}
           />
+          <AppearanceButton />
           <button className="titlebar-btn" onClick={onSignOut}>
             Logout
           </button>
