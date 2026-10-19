@@ -37,6 +37,22 @@ jobs:
           CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
         run: .github/scripts/setup-keychain.sh
 
+      # electron-builder caches its GitHub publisher only after an async create,
+      # so artifacts finishing together each get their own publisher, each finds
+      # no release for the tag, and each creates one — v1.8.0 ended up with its
+      # assets split across two drafts. With a draft already there, every
+      # publisher finds it and uploads into it. Skipped if a release for the tag
+      # exists, so re-running the job is safe.
+      - name: Create the draft release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if gh release view "$GITHUB_REF_NAME" > /dev/null 2>&1; then
+            echo "Release $GITHUB_REF_NAME already exists"
+          else
+            gh release create "$GITHUB_REF_NAME" --draft --verify-tag --title "${GITHUB_REF_NAME#v}"
+          fi
+
       # CSC_LINK is deliberately not passed here: given it, electron-builder
       # re-imports the certificate into a keychain of its own and fails.
       - name: Build, sign, notarize and publish
