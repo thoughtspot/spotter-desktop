@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Notification, dialog, session, ipcMain, shell, screen, powerMonitor } = require('electron');
+const { app, BrowserWindow, Notification, dialog, session, ipcMain, shell, screen, nativeTheme, powerMonitor } = require('electron');
 const path = require('path');
 const config = require('./config');
 const orgs = require('./orgs');
@@ -13,8 +13,11 @@ const AUTH_LOADING_HTML = path.join(__dirname, 'auth-loading.html');
 // from the release URLs the banner actually hands us.
 const RELEASES_URL_PREFIX = `https://github.com/${updater.REPO}`;
 
-// Matches the renderer's chrome color so the window does not flash on launch.
-const BACKGROUND = '#ffffff';
+// Match the renderer's --bg for the current appearance, so the window does not
+// flash the wrong color before the first paint. Mirrors styles.css.
+function windowBackground() {
+  return nativeTheme.shouldUseDarkColors ? '#1f2024' : '#ffffff';
+}
 const DEFAULT_BOUNDS = { width: 1440, height: 900 };
 
 let mainWindow = null;
@@ -157,7 +160,7 @@ function createWindow() {
     minHeight: 600,
     titleBarStyle: 'hiddenInset',
     trafficLightPosition: { x: 16, y: 16 },
-    backgroundColor: BACKGROUND,
+    backgroundColor: windowBackground(),
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -362,7 +365,7 @@ ipcMain.handle('open-auth-window', async () => {
       title: 'Sign in to ThoughtSpot',
       // Without this the window paints its default white before the first
       // document arrives, which reads as a broken window rather than a wait.
-      backgroundColor: '#ffffff',
+      backgroundColor: windowBackground(),
       webPreferences: {
         nodeIntegration: false,
         contextIsolation: true,
@@ -476,6 +479,12 @@ app.whenReady().then(() => {
   });
   createWindow();
   scheduleUpdateChecks();
+
+  // The CSS follows the appearance on its own; the native window background
+  // shows through on resize and during reloads, so it has to follow too.
+  nativeTheme.on('updated', () => {
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.setBackgroundColor(windowBackground());
+  });
 });
 
 app.on('window-all-closed', () => {
