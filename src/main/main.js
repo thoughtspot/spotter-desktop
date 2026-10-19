@@ -48,6 +48,42 @@ function rememberBounds() {
   }, 400);
 }
 
+// ---------- Response header rewriting ----------
+
+const CSP_HEADERS = [
+  'x-frame-options',
+  'content-security-policy',
+  'content-security-policy-report-only',
+];
+
+// Header names arrive in whatever case the server sent, so every lookup here is
+// case-insensitive rather than guessing at spellings.
+function withoutHeaders(responseHeaders, names) {
+  const headers = { ...responseHeaders };
+  for (const key of Object.keys(headers)) {
+    if (names.includes(key.toLowerCase())) delete headers[key];
+  }
+  return headers;
+}
+
+// Drop frame-ancestors from a CSP while leaving the directives that protect the
+// framed page itself — script-src, connect-src and the rest — in force.
+function withoutFrameAncestors(responseHeaders) {
+  const headers = withoutHeaders(responseHeaders, ['x-frame-options']);
+  for (const [key, value] of Object.entries(headers)) {
+    const name = key.toLowerCase();
+    if (name !== 'content-security-policy' && name !== 'content-security-policy-report-only') continue;
+    const policies = (Array.isArray(value) ? value : [value]).map((policy) => (
+      policy
+        .split(';')
+        .filter((directive) => directive.trim().split(/\s+/)[0].toLowerCase() !== 'frame-ancestors')
+        .join(';')
+    ));
+    headers[key] = policies;
+  }
+  return headers;
+}
+
 // ---------- Session hardening ----------
 
 // Embedded content must never be able to spawn an unmanaged BrowserWindow —
@@ -91,15 +127,20 @@ function configureSession() {
   // Strip framing and CSP restrictions so the embed iframe works. Scoped to the
   // configured ThoughtSpot origin so third-party requests (e.g. OIDC providers)
   // keep their security headers.
+  //
+  // Nested frames on other origins get a narrower treatment: only the rules that
+  // decide who may frame them are dropped, and the rest of their policy stands.
+  // ThoughtSpot renders charts in an iframe on its own chart host, which allows
+  // `frame-ancestors *` — and `*` matches network schemes only, so the file://
+  // page this app runs on is not an allowed ancestor and Chromium blocks the
+  // frame. The embedded app then shows "Cannot display the chart". A browser
+  // never hits this because its page is served over https.
   defaultSession.webRequest.onHeadersReceived((details, callback) => {
-    if (!isSameOrigin(details.url, currentTsHost)) return callback({});
-    const headers = { ...details.responseHeaders };
-    delete headers['x-frame-options'];
-    delete headers['X-Frame-Options'];
-    delete headers['content-security-policy'];
-    delete headers['Content-Security-Policy'];
-    delete headers['content-security-policy-report-only'];
-    delete headers['Content-Security-Policy-Report-Only'];
+    const trusted = isSameOrigin(details.url, currentTsHost);
+    if (!trusted && details.resourceType !== 'subFrame') return callback({});
+    const headers = trusted
+      ? withoutHeaders(details.responseHeaders, CSP_HEADERS)
+      : withoutFrameAncestors(details.responseHeaders);
     callback({ responseHeaders: headers });
   });
 }
