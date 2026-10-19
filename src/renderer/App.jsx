@@ -431,6 +431,9 @@ function SpotterPage({ tsHost, appVersion, onSignOut, onAuthLost }) {
                 enablePastConversationsSidebar: true,
                 spotterSidebarTitle: 'My Conversations',
                 spotterSidebarDefaultExpanded: false,
+                // Native Spotter ships pinning on; embeds have it off unless
+                // asked (26.10+). Older clusters ignore it.
+                spotterChatPinConfig: { enabled: true },
               }}
               // The sidebar footer's docs/"Best Practices" link points at the
               // ThoughtSpot help site, which has nowhere useful to go from a
