@@ -20,7 +20,7 @@ Built with Electron + React, it wraps the ThoughtSpot Visual Embed SDK to delive
 The easiest way to get started is to download the latest release directly — no Node.js or build tools needed.
 
 1. Go to the [Releases](https://github.com/thoughtspot/spotter-desktop/releases) page
-2. Download the latest `Spotter-<version>.dmg`
+2. Download the latest `Spotter-<version>-arm64.dmg` for Apple Silicon, or `Spotter-<version>.dmg` for an Intel Mac
 3. Open the `.dmg`, drag **Spotter** to your Applications folder
 4. Launch Spotter from Applications or Spotlight
 
@@ -66,7 +66,8 @@ npm run lint
 npm run pack
 ```
 
-Outputs a signed `.dmg` and `.zip` in the `dist/` folder.
+Outputs a signed `.dmg` and `.zip` for both Apple Silicon (`-arm64`) and Intel in
+the `dist/` folder. Auto-update picks the build matching the running Mac.
 
 ### Code Signing & Notarization
 
